@@ -5,32 +5,81 @@ from sentence_transformers import SentenceTransformer, util
 import uuid
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+import openai
+import os
 
-# Initialize the embedding model
-model = SentenceTransformer("all-MiniLM-L6-v2")
-
-st.set_page_config(page_title="Daily Research Consolidator", layout="wide")
-st.title("📊 Daily Research Summary Dashboard")
+# UI Config
+st.set_page_config(page_title="AI-Powered Research Dashboard", layout="wide")
+st.title("🤖 Daily Research Summary (AI Enhanced)")
 
 st.markdown("""
-Upload structured Excel sheets from analysts. The system will:
-1. Remove duplicate/similar news using embeddings
-2. Tag news items (e.g., sector, type)
-3. Retain analyst-specific insights
-4. Present a clean dashboard view with filters
+Upload Excel sheets from analysts. The app will:
+- Deduplicate and group similar news
+- Generate summaries using GPT
+- Tag each item with sectors/types
+- Present a clean, categorized dashboard
 """)
 
-uploaded_files = st.file_uploader("Upload Research Files (Excel)", type=["xlsx"], accept_multiple_files=True)
+# Collect API Key
+api_key = st.sidebar.text_input("🔐 Enter your OpenAI API Key", type="password")
+if api_key:
+    openai.api_key = api_key
+else:
+    st.warning("Please enter your OpenAI API key in the sidebar to continue.")
+    st.stop()
+
+with st.sidebar.expander("💡 How to get your OpenAI API Key", expanded=False):
+    st.markdown("""
+1. Go to [platform.openai.com/signup](https://platform.openai.com/signup) and sign up.
+2. Visit [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
+3. Click **"Create new secret key"**
+4. Copy the key (starts with `sk-...`)
+5. Paste it into the field above.
+
+⚠️ Your key stays private and is not stored anywhere.
+""")
+
+# Load Embedding Model
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+# File Upload
+uploaded_files = st.file_uploader("📥 Upload Analyst Research Files (Excel)", type=["xlsx"], accept_multiple_files=True)
 
 @st.cache_data
 
 def compute_embeddings(texts):
     return model.encode(texts, convert_to_tensor=False)
 
+@st.cache_data
+
+def gpt_summarize_and_tag(texts):
+    prompt = f"""
+You are an assistant that condenses financial news. Summarize the following entries into one line and suggest a few relevant sectors (e.g., Banking, IT, Pharma, Macro, Policy, Markets, Energy).
+
+Entries:
+{texts}
+
+Return as:
+Summary: <one-liner summary>
+Tags: <comma-separated sector/type tags>
+"""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You summarize and tag financial news."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        reply = response.choices[0].message.content
+        summary_line = reply.split("Summary:")[1].split("Tags:")[0].strip()
+        tag_line = reply.split("Tags:")[1].strip()
+        return summary_line, [t.strip() for t in tag_line.split(",")]
+    except Exception as e:
+        return "Summary failed", ["Uncategorized"]
+
 if uploaded_files:
     raw_entries = []
-    all_tags = set()
-    all_sectors = set()
 
     for uploaded_file in uploaded_files:
         analyst_name = Path(uploaded_file.name).stem
@@ -41,8 +90,8 @@ if uploaded_files:
                     entry = {
                         "text": item.strip(),
                         "analyst": analyst_name,
-                        "tags": [],  # Placeholder for tagging logic
-                        "sector": "Unknown",  # Placeholder
+                        "tags": [],
+                        "sector": "Unknown",
                         "id": str(uuid.uuid4())
                     }
                     raw_entries.append(entry)
@@ -53,7 +102,6 @@ if uploaded_files:
     texts = [entry["text"] for entry in raw_entries]
     embeddings = compute_embeddings(texts)
     similarity_matrix = cosine_similarity(embeddings)
-
     threshold = 0.8
     grouped = []
     used = set()
@@ -71,23 +119,40 @@ if uploaded_files:
                 used.add(j)
         grouped.append(group)
 
-    st.info(f"🧹 Reduced from {len(raw_entries)} to {len(grouped)} unique items.")
+    # Enhance each group with GPT summary & tags
+    enhanced = []
+    for group in grouped:
+        combined_text = "\n".join([item["text"] for item in group])
+        summary, tags = gpt_summarize_and_tag(combined_text)
+        analysts = list({item['analyst'] for item in group})
+        enhanced.append({
+            "summary": summary,
+            "tags": tags,
+            "analysts": analysts,
+            "entries": group
+        })
 
     # Sidebar filters
-    all_analysts = sorted(set(e['analyst'] for g in grouped for e in g))
+    all_tags = sorted(set(tag for item in enhanced for tag in item["tags"]))
+    all_analysts = sorted(set(a for item in enhanced for a in item["analysts"]))
+    selected_tags = st.sidebar.multiselect("Filter by Sector/Tag", all_tags, default=all_tags)
     selected_analysts = st.sidebar.multiselect("Filter by Analyst", all_analysts, default=all_analysts)
 
-    st.subheader("📰 Consolidated News Feed")
-    for idx, group in enumerate(grouped):
-        analysts = list({e['analyst'] for e in group})
-        if not any(a in selected_analysts for a in analysts):
+    # Display
+    st.subheader("📚 Categorized News Summaries")
+    for item in enhanced:
+        if not any(tag in selected_tags for tag in item["tags"]):
+            continue
+        if not any(a in selected_analysts for a in item["analysts"]):
             continue
 
-        st.markdown(f"### {idx+1}. {group[0]['text']}")
-        st.caption("Analyst(s): " + ", ".join(analysts))
-        with st.expander("See individual entries"):
-            for entry in group:
-                st.write(f"- {entry['text']} ({entry['analyst']})")
-else:
-    st.info("Upload at least one Excel file to begin.")
+        st.markdown(f"### 📝 {item['summary']}")
+        st.caption("Tags: " + ", ".join(item["tags"]))
+        st.caption("Analyst(s): " + ", ".join(item["analysts"]))
 
+        with st.expander("💬 Analyst Inputs"):
+            for entry in item["entries"]:
+                st.write(f"- {entry['text']} ({entry['analyst']})")
+
+else:
+    st.info("Upload Excel files from analysts to get started.")
