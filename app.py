@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer
 import uuid
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -46,18 +46,18 @@ model = SentenceTransformer("all-MiniLM-L6-v2")
 uploaded_files = st.file_uploader("📥 Upload Analyst Research Files (Excel)", type=["xlsx"], accept_multiple_files=True)
 
 @st.cache_data
-
 def compute_embeddings(texts):
     return model.encode(texts, convert_to_tensor=False)
 
+# Improved GPT function with error display and truncation
 @st.cache_data
-
 def gpt_summarize_and_tag(texts):
+    truncated_texts = texts[:1000]  # Truncate to avoid token limits
     prompt = f"""
 You are an assistant that condenses financial news. Summarize the following entries into one line and suggest a few relevant sectors (e.g., Banking, IT, Pharma, Macro, Policy, Markets, Energy).
 
 Entries:
-{texts}
+{truncated_texts}
 
 Return as:
 Summary: <one-liner summary>
@@ -76,6 +76,7 @@ Tags: <comma-separated sector/type tags>
         tag_line = reply.split("Tags:")[1].strip()
         return summary_line, [t.strip() for t in tag_line.split(",")]
     except Exception as e:
+        st.error(f"OpenAI API error: {e}")
         return "Summary failed", ["Uncategorized"]
 
 if uploaded_files:
@@ -122,7 +123,7 @@ if uploaded_files:
     # Enhance each group with GPT summary & tags
     enhanced = []
     for group in grouped:
-        combined_text = "\n".join([item["text"] for item in group])
+        combined_text = "\n".join([item["text"] for item in group[:5]])  # Limit input size
         summary, tags = gpt_summarize_and_tag(combined_text)
         analysts = list({item['analyst'] for item in group})
         enhanced.append({
