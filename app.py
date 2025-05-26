@@ -3,51 +3,59 @@ import pandas as pd
 from pathlib import Path
 from sentence_transformers import SentenceTransformer, util
 import uuid
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
-# Initialize the embedding model (small one for performance)
+# Initialize the embedding model
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 st.set_page_config(page_title="Daily Research Consolidator", layout="wide")
 st.title("📊 Daily Research Summary Dashboard")
 
 st.markdown("""
-Upload research summaries from multiple analysts. The app will:
-- Parse the files
-- Remove duplicate or similar items
-- Group insights
-- Preserve analyst-specific insights
+Upload structured Excel sheets from analysts. The system will:
+1. Remove duplicate/similar news using embeddings
+2. Tag news items (e.g., sector, type)
+3. Retain analyst-specific insights
+4. Present a clean dashboard view with filters
 """)
 
 uploaded_files = st.file_uploader("Upload Research Files (Excel)", type=["xlsx"], accept_multiple_files=True)
 
+@st.cache_data
+
+def compute_embeddings(texts):
+    return model.encode(texts, convert_to_tensor=False)
+
 if uploaded_files:
     raw_entries = []
+    all_tags = set()
+    all_sectors = set()
 
     for uploaded_file in uploaded_files:
         analyst_name = Path(uploaded_file.name).stem
         df = pd.read_excel(uploaded_file)
-        for _, row in df.iterrows():
-            for cell in row:
-                if pd.notna(cell) and isinstance(cell, str):
-                    raw_entries.append({
-                        "text": cell.strip(),
+        for col in df.columns:
+            for item in df[col].dropna():
+                if isinstance(item, str) and item.strip():
+                    entry = {
+                        "text": item.strip(),
                         "analyst": analyst_name,
+                        "tags": [],  # Placeholder for tagging logic
+                        "sector": "Unknown",  # Placeholder
                         "id": str(uuid.uuid4())
-                    })
+                    }
+                    raw_entries.append(entry)
 
-    st.subheader("🧾 Raw Extracted Items")
-    st.write(f"Total extracted entries: {len(raw_entries)}")
-    if st.checkbox("Show raw items"):
-        st.json(raw_entries)
+    st.success(f"✅ Parsed {len(raw_entries)} entries from uploaded files.")
 
-    # Deduplication using semantic similarity
-    st.subheader("🔍 Deduplicating Similar News Items")
-    texts = [entry['text'] for entry in raw_entries]
-    embeddings = model.encode(texts, convert_to_tensor=True)
-    threshold = 0.75
+    # Deduplication
+    texts = [entry["text"] for entry in raw_entries]
+    embeddings = compute_embeddings(texts)
+    similarity_matrix = cosine_similarity(embeddings)
 
-    # Group similar entries
-    groups = []
+    threshold = 0.8
+    grouped = []
     used = set()
 
     for i in range(len(texts)):
@@ -55,21 +63,31 @@ if uploaded_files:
             continue
         group = [raw_entries[i]]
         used.add(i)
-        for j in range(i+1, len(texts)):
+        for j in range(i + 1, len(texts)):
             if j in used:
                 continue
-            if util.pytorch_cos_sim(embeddings[i], embeddings[j]) > threshold:
+            if similarity_matrix[i][j] > threshold:
                 group.append(raw_entries[j])
                 used.add(j)
-        groups.append(group)
+        grouped.append(group)
 
-    st.success(f"Grouped into {len(groups)} distinct items")
+    st.info(f"🧹 Reduced from {len(raw_entries)} to {len(grouped)} unique items.")
 
-    # Display grouped items with analyst tags
-    for idx, group in enumerate(groups):
+    # Sidebar filters
+    all_analysts = sorted(set(e['analyst'] for g in grouped for e in g))
+    selected_analysts = st.sidebar.multiselect("Filter by Analyst", all_analysts, default=all_analysts)
+
+    st.subheader("📰 Consolidated News Feed")
+    for idx, group in enumerate(grouped):
+        analysts = list({e['analyst'] for e in group})
+        if not any(a in selected_analysts for a in analysts):
+            continue
+
         st.markdown(f"### {idx+1}. {group[0]['text']}")
-        analysts = list({entry['analyst'] for entry in group})
         st.caption("Analyst(s): " + ", ".join(analysts))
-
+        with st.expander("See individual entries"):
+            for entry in group:
+                st.write(f"- {entry['text']} ({entry['analyst']})")
 else:
-    st.info("Please upload at least one Excel file to begin.")
+    st.info("Upload at least one Excel file to begin.")
+
