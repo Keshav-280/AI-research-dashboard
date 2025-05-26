@@ -10,34 +10,22 @@ import os
 
 # UI Config
 st.set_page_config(page_title="AI-Powered Research Dashboard", layout="wide")
-st.title("🤖 Daily Research Summary (AI Enhanced)")
+st.title("🤖 Daily Research Summary (Simulated + GPT Ready)")
 
 st.markdown("""
 Upload Excel sheets from analysts. The app will:
 - Deduplicate and group similar news
-- Generate summaries using GPT
+- Generate summaries using GPT or simulated output
 - Tag each item with sectors/types
 - Present a clean, categorized dashboard
 """)
 
-# Collect API Key
-api_key = st.sidebar.text_input("🔐 Enter your OpenAI API Key", type="password")
+# Optional OpenAI Key
+api_key = st.sidebar.text_input("🔐 Enter your OpenAI API Key (Optional)", type="password")
+use_gpt = False
 if api_key:
     openai.api_key = api_key
-else:
-    st.warning("Please enter your OpenAI API key in the sidebar to continue.")
-    st.stop()
-
-with st.sidebar.expander("💡 How to get your OpenAI API Key", expanded=False):
-    st.markdown("""
-1. Go to [platform.openai.com/signup](https://platform.openai.com/signup) and sign up.
-2. Visit [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
-3. Click **"Create new secret key"**
-4. Copy the key (starts with `sk-...`)
-5. Paste it into the field above.
-
-⚠️ Your key stays private and is not stored anywhere.
-""")
+    use_gpt = True
 
 # Load Embedding Model
 model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -49,15 +37,26 @@ uploaded_files = st.file_uploader("📥 Upload Analyst Research Files (Excel)", 
 def compute_embeddings(texts):
     return model.encode(texts, convert_to_tensor=False)
 
-# Improved GPT function with error display and truncation
+# Simulated GPT Output
+SIMULATED_SUMMARIES = [
+    ("India and UK advance FTA talks, easing trade restrictions", ["Macro", "Policy"]),
+    ("US pushes domestic pharma growth amid tightening FDA approvals", ["Pharma", "Policy"]),
+    ("Sustainable transport added to India's climate plan", ["Energy", "Transport"]),
+    ("Private equity investments in India see strong momentum", ["Markets", "Finance"]),
+    ("Bank of Baroda posts strong quarterly results", ["Banking"])
+]
+
+# GPT Summary + Tagging or fallback
 @st.cache_data
-def gpt_summarize_and_tag(texts):
-    truncated_texts = texts[:1000]  # Truncate to avoid token limits
+def gpt_summarize_and_tag(texts, fallback_id):
+    if not use_gpt:
+        return SIMULATED_SUMMARIES[fallback_id % len(SIMULATED_SUMMARIES)]
+
     prompt = f"""
 You are an assistant that condenses financial news. Summarize the following entries into one line and suggest a few relevant sectors (e.g., Banking, IT, Pharma, Macro, Policy, Markets, Energy).
 
 Entries:
-{truncated_texts}
+{texts[:1000]}
 
 Return as:
 Summary: <one-liner summary>
@@ -76,8 +75,8 @@ Tags: <comma-separated sector/type tags>
         tag_line = reply.split("Tags:")[1].strip()
         return summary_line, [t.strip() for t in tag_line.split(",")]
     except Exception as e:
-        st.error(f"OpenAI API error: {e}")
-        return "Summary failed", ["Uncategorized"]
+        st.warning(f"Falling back to simulated GPT due to: {e}")
+        return SIMULATED_SUMMARIES[fallback_id % len(SIMULATED_SUMMARIES)]
 
 if uploaded_files:
     raw_entries = []
@@ -120,11 +119,11 @@ if uploaded_files:
                 used.add(j)
         grouped.append(group)
 
-    # Enhance each group with GPT summary & tags
+    # Enhance each group with summary & tags
     enhanced = []
-    for group in grouped:
-        combined_text = "\n".join([item["text"] for item in group[:5]])  # Limit input size
-        summary, tags = gpt_summarize_and_tag(combined_text)
+    for idx, group in enumerate(grouped):
+        combined_text = "\n".join([item["text"] for item in group[:5]])  # limit size
+        summary, tags = gpt_summarize_and_tag(combined_text, idx)
         analysts = list({item['analyst'] for item in group})
         enhanced.append({
             "summary": summary,
