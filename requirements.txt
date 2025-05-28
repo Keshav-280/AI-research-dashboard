@@ -5,3 +5,4 @@ sentence-transformers
 openai==0.28
 numpy
 openpyxl
+torch
