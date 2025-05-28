@@ -28,7 +28,7 @@ if api_key:
     use_gpt = True
 
 # Load Embedding Model
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer("all-MiniLM-L6-v2", device='cpu')
 
 # File Upload
 uploaded_files = st.file_uploader("📥 Upload Analyst Research Files (Excel)", type=["xlsx"], accept_multiple_files=True)
